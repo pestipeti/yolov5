@@ -14,8 +14,8 @@ import torch
 
 def fitness(x):
     # Model fitness as a weighted combination of metrics
-    w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
-    return (x[:, :4] * w).sum(1)
+    w = [0.0, 0.0, 0.0, 0.0, 1.0]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95, f2]
+    return (x[:, :5] * w).sum(1)
 
 
 def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names=(), eps=1e-16):
@@ -43,6 +43,7 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
     # Create Precision-Recall curve and compute AP for each class
     px, py = np.linspace(0, 1, 1000), []  # for plotting
     ap, p, r = np.zeros((nc, tp.shape[1])), np.zeros((nc, 1000)), np.zeros((nc, 1000))
+
     for ci, c in enumerate(unique_classes):
         i = pred_cls == c
         n_l = nt[ci]  # number of labels
@@ -71,11 +72,14 @@ def ap_per_class(tp, conf, pred_cls, target_cls, plot=False, save_dir='.', names
 
     # Compute F1 (harmonic mean of precision and recall)
     f1 = 2 * p * r / (p + r + eps)
+    f2 = 5 * p * r / (4 * p + r + eps)
     names = [v for k, v in names.items() if k in unique_classes]  # list: only classes that have data
     names = {i: v for i, v in enumerate(names)}  # to dict
+
     if plot:
         plot_pr_curve(px, py, ap, Path(save_dir) / 'PR_curve.png', names)
         plot_mc_curve(px, f1, Path(save_dir) / 'F1_curve.png', names, ylabel='F1')
+        plot_mc_curve(px, f2, Path(save_dir) / 'F2_curve.png', names, ylabel='F2')
         plot_mc_curve(px, p, Path(save_dir) / 'P_curve.png', names, ylabel='Precision')
         plot_mc_curve(px, r, Path(save_dir) / 'R_curve.png', names, ylabel='Recall')
 
@@ -266,6 +270,73 @@ def box_iou(box1, box2):
     # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
     inter = (torch.min(box1[:, None, 2:], box2[:, 2:]) - torch.max(box1[:, None, :2], box2[:, :2])).clamp(0).prod(2)
     return inter / (area1[:, None] + area2 - inter)  # iou = inter / (area1 + area2 - inter)
+
+
+def f_beta(tp, fp, fn, beta=2):
+    return (1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * (fn + fp))
+
+
+def calc_iou(bboxes1, bboxes2, bbox_mode='xywh'):
+    assert len(bboxes1.shape) == 2 and bboxes1.shape[1] == 4
+    assert len(bboxes2.shape) == 2 and bboxes2.shape[1] == 4
+
+    bboxes1 = bboxes1.copy()
+    bboxes2 = bboxes2.copy()
+
+    if bbox_mode == 'xywh':
+        bboxes1[:, 2:] += bboxes1[:, :2]
+        bboxes2[:, 2:] += bboxes2[:, :2]
+
+    x11, y11, x12, y12 = np.split(bboxes1, 4, axis=1)
+    x21, y21, x22, y22 = np.split(bboxes2, 4, axis=1)
+    xA = np.maximum(x11, np.transpose(x21))
+    yA = np.maximum(y11, np.transpose(y21))
+    xB = np.minimum(x12, np.transpose(x22))
+    yB = np.minimum(y12, np.transpose(y22))
+    interArea = np.maximum((xB - xA + 1), 0) * np.maximum((yB - yA + 1), 0)
+    boxAArea = (x12 - x11 + 1) * (y12 - y11 + 1)
+    boxBArea = (x22 - x21 + 1) * (y22 - y21 + 1)
+    iou = interArea / (boxAArea + np.transpose(boxBArea) - interArea)
+
+    return iou
+
+
+def f2_score_at_iou_th(gt_bboxes, pred_bboxes, iou_th, verbose=False):
+    gt_bboxes = gt_bboxes.copy()
+    pred_bboxes = pred_bboxes.copy()
+
+    tp = 0
+    fp = 0
+    for idx, pred_bbox in enumerate(pred_bboxes):
+        if len(gt_bboxes) == 0:
+            fp += 1
+            continue
+        ious = calc_iou(gt_bboxes, pred_bbox[None, :-1])
+        max_iou = ious.max()
+        if max_iou > iou_th:
+            tp += 1
+            gt_bboxes = np.delete(gt_bboxes, ious.argmax(), axis=0)
+        else:
+            fp += 1
+    fn = len(gt_bboxes)
+    score = f_beta(tp, fp, fn, beta=2)
+    if verbose:
+        print(f'iou_th:{iou_th.round(2):<4} tp:{tp:<2}, fp:{fp:<2}, fn:{fn:<2} f2:{score:.3}')
+    return score
+
+
+def f2_score(gt_bboxes, pred_bboxes, verbose=False):
+    """
+    gt_bboxes: (N, 4) np.array in x1y1x2y2 format
+    pred_bboxes: (N, 5) np.array in x1,y1,x2,y2,conf format
+    """
+
+    pred_bboxes = pred_bboxes[pred_bboxes[:, -1].argsort()[::-1]]  # sort by conf
+
+    scores = []
+    for iou_th in np.arange(0.3, 0.85, 0.05):
+        scores.append(f2_score_at_iou_th(gt_bboxes, pred_bboxes, iou_th, verbose))
+    return np.mean(scores)
 
 
 def bbox_ioa(box1, box2, eps=1E-7):

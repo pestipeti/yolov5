@@ -273,7 +273,7 @@ def box_iou(box1, box2):
 
 
 def f_beta(tp, fp, fn, beta=2):
-    return (1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * (fn + fp))
+    return (1 + beta ** 2) * tp / ((1 + beta ** 2) * tp + beta ** 2 * fn + fp)
 
 
 def calc_iou(bboxes1, bboxes2, bbox_mode='xywh'):

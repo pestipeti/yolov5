@@ -164,6 +164,11 @@ def run(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     f2stats = []
+
+    num_tp = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    num_fp = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    num_fn = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
@@ -203,6 +208,7 @@ def run(data,
             if len(pred) == 0:
                 if nl:
                     stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
+                    num_fn = num_fn + nl
                 continue
 
             # Predictions
@@ -221,9 +227,23 @@ def run(data,
                     confusion_matrix.process_batch(predn, labelsn)
 
                 # f2stats.append(())
-                f2stats.append(f2_score(labelsn[:, 1:].cpu().detach().numpy(), predn[:, :5].cpu().detach().numpy()))
+                # f2stats.append(f2_score(labelsn[:, 1:].cpu().detach().numpy(), predn[:, :5].cpu().detach().numpy()))
+
+                preds, gts = predn[:, :4].cpu().detach(), labelsn[:, 1:].cpu().detach()
+
+                for idx, iou_th in enumerate(np.arange(0.3, 0.85, 0.05)):
+                    iou_matrix = box_iou(preds, gts)
+                    tp = len(torch.where(iou_matrix.max(0)[0] >= iou_th)[0])
+                    fp = len(preds) - tp
+                    fn = len(torch.where(iou_matrix.max(0)[0] < iou_th)[0])
+                    num_tp[idx] += tp
+                    num_fp[idx] += fp
+                    num_fn[idx] += fn
+
             else:
                 correct = torch.zeros(pred.shape[0], niou, dtype=torch.bool)
+                num_fp = num_fp + len(predn)
+
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))  # (correct, conf, pcls, tcls)
 
             # Save/log
@@ -249,6 +269,12 @@ def run(data,
         nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
     else:
         nt = torch.zeros(1)
+
+    # Calculate f2
+    for idx, iou_th in enumerate(np.arange(0.3, 0.85, 0.05)):
+        f2stats.append(
+            5 * num_tp[idx] / (5 * num_tp[idx] + 4 * num_fn[idx] + num_fp[idx])
+        )
 
     f2stats = np.array(f2stats).mean()
 

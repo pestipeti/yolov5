@@ -359,6 +359,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                            batch_size=batch_size // WORLD_SIZE * 2,
                                            imgsz=imgsz,
                                            model=ema.ema,
+                                           conf_thres=hyp["val_conf_thresh"],
+                                           iou_thres=hyp["val_iou_thresh"],
                                            single_cls=single_cls,
                                            dataloader=val_loader,
                                            save_dir=save_dir,
@@ -421,9 +423,10 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                             batch_size=batch_size // WORLD_SIZE * 2,
                                             imgsz=imgsz,
                                             model=attempt_load(f, device).half(),
-                                            conf_thres=0.001,
+                                            conf_thres=hyp["val_conf_thresh"],
+                                            iou_thres=hyp["val_iou_thresh"],
                                             augment=True,
-                                            iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
+                                            # iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
                                             single_cls=single_cls,
                                             dataloader=val_loader,
                                             save_dir=save_dir,

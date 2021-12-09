@@ -332,7 +332,8 @@ def run(data,
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
-    return (mp, mr, map50, map, f2stats, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+    return (mp, mr, map50, map, f2stats, num_tp[0], num_fp[0], num_fn[0],
+            *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
 
 def parse_opt():

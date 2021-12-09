@@ -265,7 +265,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
     stopper = EarlyStopping(patience=opt.patience)
-    compute_loss = ComputeLoss(model)  # init loss class
+    compute_loss = ComputeLoss(model, autobalance=True)  # init loss class
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
@@ -316,7 +316,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
             # Forward
             with amp.autocast(enabled=cuda):
-                pred = model(imgs)  # forward
+                pred = model(imgs)  # forward visualize=save_dir
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
@@ -364,8 +364,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                            single_cls=single_cls,
                                            dataloader=val_loader,
                                            save_dir=save_dir,
-                                           augment=True,
-                                           plots=False,
+                                           augment=False,
+                                           plots=True,
                                            callbacks=callbacks,
                                            compute_loss=compute_loss)
 
@@ -425,7 +425,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                             model=attempt_load(f, device).half(),
                                             conf_thres=hyp["val_conf_thresh"],
                                             iou_thres=hyp["val_iou_thresh"],
-                                            augment=True,
+                                            augment=False,
                                             # iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
                                             single_cls=single_cls,
                                             dataloader=val_loader,

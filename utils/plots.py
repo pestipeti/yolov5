@@ -140,13 +140,13 @@ def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/detec
             ax = ax.ravel()
             plt.subplots_adjust(wspace=0.05, hspace=0.05)
             for i in range(n):
-                ax[i].imshow(blocks[i].squeeze())  # cmap='gray'
+                ax[i].imshow(blocks[i].squeeze().detach().numpy())  # cmap='gray'
                 ax[i].axis('off')
 
             print(f'Saving {f}... ({n}/{channels})')
             plt.savefig(f, dpi=300, bbox_inches='tight')
             plt.close()
-            np.save(str(f.with_suffix('.npy')), x[0].cpu().numpy())  # npy save
+            np.save(str(f.with_suffix('.npy')), x[0].cpu().detach().numpy())  # npy save
 
 
 def hist2d(x, y, n=100):
@@ -213,9 +213,9 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
     annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True)
     for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
-        annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
+        # annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
         if paths:
-            annotator.text((x + 5, y + 5 + h), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
+            annotator.text((x + 5, y + h), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(targets) > 0:
             ti = targets[targets[:, 0] == i]  # image targets
             boxes = xywh2xyxy(ti[:, 2:6]).T
@@ -235,7 +235,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                 cls = classes[j]
                 color = colors(cls)
                 cls = names[cls] if names else cls
-                if labels or conf[j] > 0.25:  # 0.25 conf thresh
+                if labels or conf[j] > 0.1:  # 0.25 conf thresh
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.box_label(box, label, color=color)
     annotator.im.save(fname)  # save

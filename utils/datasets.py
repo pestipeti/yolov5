@@ -29,6 +29,8 @@ from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterb
 from utils.general import (LOGGER, check_dataset, check_requirements, check_yaml, clean_str, segments2boxes, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
+import albumentations as A
+
 
 # Parameters
 HELP_URL = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -666,6 +668,21 @@ class LoadImagesAndLabels(Dataset):
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
 
 
+augment = A.Compose([
+    A.OneOf([
+        A.Blur(p=0.5),
+        # A.MedianBlur(p=0.5),
+        A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.2, p=0.5),
+    ], p=0.2),
+    A.OneOf([
+        A.RandomBrightnessContrast(p=0.5),
+        A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.5),
+    ], 0.2),
+    A.GaussNoise(p=0.1),
+    A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=.7),
+])
+
+
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, i):
     # loads 1 image from dataset index 'i', returns im, original hw, resized hw
@@ -698,6 +715,8 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
+
+        # img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left

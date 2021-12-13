@@ -36,12 +36,12 @@ class Albumentations:
                 A.OneOf([
                     A.Blur(p=0.5),
                     A.MedianBlur(p=0.5),
-                ], p=0.01),
+                ], p=0.00),
                 A.RGBShift(p=0.0),
-                A.ToGray(p=0.01),
-                A.CLAHE(p=0.01),
+                A.ToGray(p=0.0),
+                A.CLAHE(p=0.0),
                 A.RandomBrightnessContrast(p=0.0),
-                A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=.7),
+                A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=0),
                 # A.RandomGamma(p=0.0),
                 # A.ImageCompression(quality_lower=75, p=0.0)
 

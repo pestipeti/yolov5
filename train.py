@@ -364,7 +364,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                            single_cls=single_cls,
                                            dataloader=val_loader,
                                            save_dir=save_dir,
-                                           augment=False,
+                                           augment=True,
                                            plots=True,
                                            callbacks=callbacks,
                                            compute_loss=compute_loss)
@@ -425,7 +425,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                             model=attempt_load(f, device).half(),
                                             conf_thres=hyp["val_conf_thresh"],
                                             iou_thres=hyp["val_iou_thresh"],
-                                            augment=False,
+                                            augment=True,
                                             # iou_thres=0.65 if is_coco else 0.60,  # best pycocotools results at 0.65
                                             single_cls=single_cls,
                                             dataloader=val_loader,

@@ -716,7 +716,7 @@ def load_mosaic(self, index):
         # Load image
         img, _, (h, w) = load_image(self, index)
 
-        # img = augment(image=img)["image"]
+        img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left

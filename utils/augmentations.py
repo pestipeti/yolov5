@@ -36,7 +36,7 @@ class Albumentations:
                 A.OneOf([
                     A.Blur(p=0.5),
                     A.MedianBlur(p=0.5),
-                ], p=0.00),
+                ], p=0.0),
                 A.RGBShift(p=0.0),
                 A.ToGray(p=0.0),
                 A.CLAHE(p=0.0),

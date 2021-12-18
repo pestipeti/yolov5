@@ -673,12 +673,12 @@ augment = A.Compose([
         A.Blur(p=0.5),
         # A.MedianBlur(p=0.5),
         A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.2, p=0.5),
-    ], p=0.2),
+    ], p=0.15),
     A.OneOf([
         A.RandomBrightnessContrast(p=0.5),
         A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.5),
-    ], 0.2),
-    A.GaussNoise(p=0.1),
+    ], 0.15),
+    A.GaussNoise(p=0.2),
     A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=.7),
 ])
 

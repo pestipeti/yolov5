@@ -668,6 +668,7 @@ class LoadImagesAndLabels(Dataset):
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
 
 
+"""
 augment = A.Compose([
     A.OneOf([
         A.Blur(p=0.5),
@@ -681,7 +682,7 @@ augment = A.Compose([
     A.GaussNoise(p=0.2),
     A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=.7),
 ])
-
+"""
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, i):
@@ -715,8 +716,7 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
-
-        img = augment(image=img)["image"]
+        # img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left

@@ -14,7 +14,7 @@ import torch
 
 def fitness(x):
     # Model fitness as a weighted combination of metrics
-    w = [0.0, 0.0, 0.0, 0.0, 1.0]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95, f2]
+    w = [0.0, 0.0, 0.1, 0.5, 0.4]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95, f2]
     return (x[:, :5] * w).sum(1)
 
 

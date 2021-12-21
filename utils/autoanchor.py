@@ -43,6 +43,9 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
     anchors = m.anchors.clone() * m.stride.to(m.anchors.device).view(-1, 1, 1)  # current anchors
     bpr, aat = metric(anchors.cpu().view(-1, 2))
     s = f'\n{PREFIX}{aat:.2f} anchors/target, {bpr:.3f} Best Possible Recall (BPR). '
+
+    # Force recalculate.
+    bpr = 0
     if bpr > 0.98:  # threshold to recompute
         LOGGER.info(emojis(f'{s}Current anchors are a good fit to dataset ✅'))
     else:

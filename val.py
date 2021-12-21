@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Thread
 
 import numpy as np
+import pandas as pd
 import torch
 from tqdm import tqdm
 
@@ -78,6 +79,31 @@ def process_batch(detections, labels, iouv):
         matches = torch.Tensor(matches).to(iouv.device)
         correct[matches[:, 1].long()] = matches[:, 2:3] >= iouv
     return correct
+
+
+def get_lb_metric(preds, gts, scores, iou_matrix, iou_th):
+    tps = []
+    fps = []
+    fns = []
+
+    # check decreasing confidence...
+    sorted_idx = scores.argsort()[::-1]
+
+    for _idx in sorted_idx:
+        mx = iou_matrix[_idx].argmax()
+        if iou_matrix[_idx][mx] >= iou_th:
+            # tp
+            tps.append(preds[_idx])
+            iou_matrix[:, mx] = -1
+        else:
+            # fp
+            fps.append(preds[_idx])
+
+    for _idx in range(len(gts)):
+        if iou_matrix[:, _idx].min() >= 0:
+            fns.append(gts[_idx])
+
+    return tps, fps, fns
 
 
 @torch.no_grad()
@@ -169,6 +195,8 @@ def run(data,
     num_fp = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     num_fn = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
+    results = []
+
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
@@ -206,8 +234,21 @@ def run(data,
             seen += 1
 
             if len(pred) == 0:
+
                 if nl:
                     stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
+
+                    labels = labels.detach().cpu().numpy()
+                    for label in labels:
+                        results.append({
+                            "path": paths[si],
+                            "result": "fn",
+                            "x": int(label[1]),
+                            "y": int(label[2]),
+                            "w": int(label[3]),
+                            "h": int(label[4])
+                        })
+
                     num_fn = num_fn + nl
                 continue
 
@@ -230,9 +271,12 @@ def run(data,
                 # f2stats.append(f2_score(labelsn[:, 1:].cpu().detach().numpy(), predn[:, :5].cpu().detach().numpy()))
 
                 preds, gts = predn[:, :4].cpu().detach(), labelsn[:, 1:].cpu().detach()
+                scores = predn[:, 4].cpu().detach()
+
+                iou_matrix = box_iou(preds, gts)
 
                 for idx, iou_th in enumerate(np.arange(0.3, 0.85, 0.05)):
-                    iou_matrix = box_iou(preds, gts)
+
                     tp = len(torch.where(iou_matrix.max(0)[0] >= iou_th)[0])
                     fp = len(preds) - tp
                     fn = len(torch.where(iou_matrix.max(0)[0] < iou_th)[0])
@@ -240,9 +284,50 @@ def run(data,
                     num_fp[idx] += fp
                     num_fn[idx] += fn
 
+                tps, fps, fns = get_lb_metric(preds.numpy(), gts.numpy(), scores.numpy(), iou_matrix.numpy(), 0.3)
+
+                for it in tps:
+                    results.append({
+                        "path": paths[si],
+                        "result": "tp",
+                        "x": int(it[0]),
+                        "y": int(it[1]),
+                        "w": int(it[2] - it[0]),
+                        "h": int(it[3] - it[1])
+                    })
+                for it in fps:
+                    results.append({
+                        "path": paths[si],
+                        "result": "fp",
+                        "x": int(it[0]),
+                        "y": int(it[1]),
+                        "w": int(it[2] - it[0]),
+                        "h": int(it[3] - it[1])
+                    })
+                for it in fns:
+                    results.append({
+                        "path": paths[si],
+                        "result": "fn",
+                        "x": int(it[0]),
+                        "y": int(it[1]),
+                        "w": int(it[2] - it[0]),
+                        "h": int(it[3] - it[1])
+                    })
+
             else:
                 correct = torch.zeros(pred.shape[0], niou, dtype=torch.bool)
                 num_fp = num_fp + len(predn)
+
+                preds = predn.detach().cpu().numpy()
+                for prd in preds:
+                    results.append({
+                        "path": paths[si],
+                        "result": "fp",
+                        "x": int(prd[0]),
+                        "y": int(prd[1]),
+                        "w": int(prd[2] - prd[0]),
+                        "h": int(prd[3] - prd[1])
+                    })
 
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))  # (correct, conf, pcls, tcls)
 
@@ -259,6 +344,10 @@ def run(data,
             Thread(target=plot_images, args=(im, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(im, output_to_target(out), paths, f, names), daemon=True).start()
+
+    if verbose:
+        results = pd.DataFrame(results)
+        results.to_csv(save_dir / "results.csv", index=False)
 
     # Compute metrics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy

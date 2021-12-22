@@ -238,15 +238,19 @@ def run(data,
                 if nl:
                     stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
 
-                    labels = labels.detach().cpu().numpy()
-                    for label in labels:
+                    tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                    scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+                    labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                    labelsn = labelsn[:, 1:].detach().cpu().numpy()
+
+                    for label in labelsn:
                         results.append({
                             "path": paths[si],
                             "result": "fn",
-                            "x": int(label[1]),
-                            "y": int(label[2]),
-                            "w": int(label[3]),
-                            "h": int(label[4])
+                            "x": int(label[0]),
+                            "y": int(label[1]),
+                            "w": int(label[2] - label[0]),
+                            "h": int(label[3] - label[1])
                         })
 
                     num_fn = num_fn + nl
@@ -347,7 +351,7 @@ def run(data,
 
     if verbose:
         results = pd.DataFrame(results)
-        results.to_csv(save_dir / "results.csv", index=False)
+        results.to_csv(save_dir / "box-results.csv", index=False)
 
     # Compute metrics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy

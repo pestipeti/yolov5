@@ -668,21 +668,31 @@ class LoadImagesAndLabels(Dataset):
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
 
 
-"""
 augment = A.Compose([
+
+    A.OneOf([
+        A.RandomRain(rain_type='drizzle', p=0.2, drop_color=(50, 130, 160)),
+        A.RandomRain(rain_type='heavy', p=0.5, drop_color=(40, 123, 153)),
+        A.RandomRain(rain_type='torrential', p=0.3, drop_color=(70, 130, 150)),
+    ], p=0.1),
+
+    A.OneOf([
+        A.RandomBrightnessContrast(p=0.4),
+        A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.3),
+        A.RGBShift(r_shift_limit=5, p=0.3)
+    ], 0.15),
+
     A.OneOf([
         A.Blur(p=0.5),
         # A.MedianBlur(p=0.5),
         A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.2, p=0.5),
-    ], p=0.15),
-    A.OneOf([
-        A.RandomBrightnessContrast(p=0.5),
-        A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.5),
-    ], 0.15),
+    ], p=0.1),
+
+    A.RandomSunFlare(src_radius=150, src_color=(60, 60, 60), p=0.05),
     A.GaussNoise(p=0.2),
     A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=.7),
 ])
-"""
+
 
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, i):
@@ -716,7 +726,7 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
-        # img = augment(image=img)["image"]
+        img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left

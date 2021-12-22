@@ -148,7 +148,7 @@ class Loggers():
             self.wandb.log({"Results": [wandb.Image(str(f), caption=f.name) for f in files]})
 
             if (self.save_dir / 'box-results.csv').exists():
-                self.wandb.save(self.save_dir / 'box-results.csv')
+                wandb.save(self.save_dir / 'box-results.csv')
 
             # Calling wandb.log. TODO: Refactor this into WandbLogger.log_model
             if not self.opt.evolve:

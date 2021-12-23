@@ -670,17 +670,18 @@ class LoadImagesAndLabels(Dataset):
 
 augment = A.Compose([
 
+    A.RandomBrightnessContrast(contrast_limit=0.1, brightness_limit=0.4, p=0.5),
+
     A.OneOf([
         A.RandomRain(rain_type='drizzle', p=0.2, drop_color=(50, 130, 160)),
         A.RandomRain(rain_type='heavy', p=0.5, drop_color=(40, 123, 153)),
         A.RandomRain(rain_type='torrential', p=0.3, drop_color=(70, 130, 150)),
     ], p=0.15),
 
-    A.OneOf([
-        A.RandomBrightnessContrast(p=0.4),
-        A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.3),
-        A.RGBShift(r_shift_limit=5, p=0.3)
-    ], 0.15),
+    # A.OneOf([
+    #     A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0, val_shift_limit=(-40, 20), p=0.3),
+    #     A.RGBShift(r_shift_limit=5, p=0.3)
+    # ], 0.15),
 
     A.OneOf([
         A.Blur(p=0.5),

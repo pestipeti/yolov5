@@ -6,6 +6,7 @@ Dataloaders and dataset utils
 import glob
 import hashlib
 import json
+import math
 import os
 import random
 import shutil
@@ -25,15 +26,10 @@ from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
 
-from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterbox, mixup, random_perspective, cutout
-from utils.general import (LOGGER, check_dataset, check_requirements, check_yaml, clean_str, segments2boxes, xyn2xy,
-                           xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
+from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterbox, mixup, random_perspective
+from utils.general import (LOGGER, NUM_THREADS, check_dataset, check_requirements, check_yaml, clean_str,
+                           segments2boxes, xyn2xy, xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
-import albumentations as A
-from albumentations.core.transforms_interface import ImageOnlyTransform
-from albumentations.augmentations.functional import MAX_VALUES_BY_DTYPE
-from functools import wraps
-
 
 # Parameters
 HELP_URL = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -205,7 +201,7 @@ class LoadImages:
             # Read video
             self.mode = 'video'
             ret_val, img0 = self.cap.read()
-            if not ret_val:
+            while not ret_val:
                 self.count += 1
                 self.cap.release()
                 if self.count == self.nf:  # last video
@@ -314,8 +310,9 @@ class LoadStreams:
             assert cap.isOpened(), f'{st}Failed to open {s}'
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            self.fps[i] = max(cap.get(cv2.CAP_PROP_FPS) % 100, 0) or 30.0  # 30 FPS fallback
+            fps = cap.get(cv2.CAP_PROP_FPS)  # warning: may return 0 or nan
             self.frames[i] = max(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 0) or float('inf')  # infinite stream fallback
+            self.fps[i] = max((fps if math.isfinite(fps) else 0) % 100, 0) or 30  # 30 FPS fallback
 
             _, self.imgs[i] = cap.read()  # guarantee first frame
             self.threads[i] = Thread(target=self.update, args=([i, cap, s]), daemon=True)
@@ -342,7 +339,7 @@ class LoadStreams:
                     self.imgs[i] = im
                 else:
                     LOGGER.warning('WARNING: Video stream unresponsive, please check your IP camera connection.')
-                    self.imgs[i] *= 0
+                    self.imgs[i] = np.zeros_like(self.imgs[i])
                     cap.open(stream)  # re-open stream if signal was lost
             time.sleep(1 / self.fps[i])  # wait time
 
@@ -572,23 +569,13 @@ class LoadImagesAndLabels(Dataset):
         else:
             # Load image
             img, (h0, w0), (h, w) = load_image(self, index)
-            labels = self.labels[index].copy()
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
             img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
             shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
 
-            # Mixup
-            if self.augment and random.random() < hyp['mixup']:
-                midx = random.randint(0, self.n - 1)
-                mlabels = self.labels[midx].copy()
-                mimg, (_, _), (_, _) = load_image(self, midx)
-
-                # Letterbox
-                mimg, ratio, pad = letterbox(mimg, shape, auto=False, scaleup=self.augment)
-                img, labels = mixup(img, labels, mimg, mlabels, 35)
-
+            labels = self.labels[index].copy()
             if labels.size:  # normalized xywh to pixel xyxy format
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
@@ -626,6 +613,7 @@ class LoadImagesAndLabels(Dataset):
 
             # Cutouts
             # labels = cutout(img, labels, p=0.5)
+            # nl = len(labels)  # update after cutout
 
         labels_out = torch.zeros((nl, 6))
         if nl:
@@ -671,275 +659,6 @@ class LoadImagesAndLabels(Dataset):
         return torch.stack(img4, 0), torch.cat(label4, 0), path4, shapes4
 
 
-def to_float(img, max_value=None):
-    if max_value is None:
-        try:
-            max_value = MAX_VALUES_BY_DTYPE[img.dtype]
-        except KeyError:
-            raise RuntimeError(
-                "Can't infer the maximum value for dtype {}. You need to specify the maximum value manually by "
-                "passing the max_value argument".format(img.dtype)
-            )
-    return img.astype("float32") / max_value
-
-
-def from_float(img, dtype, max_value=None):
-    if max_value is None:
-        try:
-            max_value = MAX_VALUES_BY_DTYPE[dtype]
-        except KeyError:
-            raise RuntimeError(
-                "Can't infer the maximum value for dtype {}. You need to specify the maximum value manually by "
-                "passing the max_value argument".format(dtype)
-            )
-    return (img * max_value).astype(dtype)
-
-
-def preserve_shape(func):
-    """
-    Preserve shape of the image
-
-    """
-
-    @wraps(func)
-    def wrapped_function(img, *args, **kwargs):
-        shape = img.shape
-        result = func(img, *args, **kwargs)
-        result = result.reshape(shape)
-        return result
-
-    return wrapped_function
-
-
-@preserve_shape
-def add_rain(
-    img,
-    slant,
-    drop_length,
-    drop_width,
-    drop_color,
-    blur_value,
-    brightness_coefficient,
-    rain_drops,
-):
-    """
-
-    From https://github.com/UjjwalSaxena/Automold--Road-Augmentation-Library
-
-    Args:
-        img (numpy.ndarray): Image.
-        slant (int):
-        drop_length:
-        drop_width:
-        drop_color:
-        blur_value (int): Rainy view are blurry.
-        brightness_coefficient (float): Rainy days are usually shady.
-        rain_drops:
-
-    Returns:
-        numpy.ndarray: Image.
-
-    """
-    # non_rgb_warning(img)
-
-    input_dtype = img.dtype
-    needs_float = False
-
-    if input_dtype == np.float32:
-        img = from_float(img, dtype=np.dtype("uint8"))
-        needs_float = True
-    elif input_dtype not in (np.uint8, np.float32):
-        raise ValueError("Unexpected dtype {} for RandomRain augmentation".format(input_dtype))
-
-    image_o = img.copy()
-    image = img.copy()
-    image *= 0
-
-    for (rain_drop_x0, rain_drop_y0) in rain_drops:
-        rain_drop_x1 = rain_drop_x0 + slant
-        rain_drop_y1 = rain_drop_y0 + drop_length
-
-        cv2.line(
-            image,
-            (rain_drop_x0, rain_drop_y0),
-            (rain_drop_x1, rain_drop_y1),
-            drop_color,
-            drop_width,
-        )
-
-    image = cv2.blur(image, (blur_value, blur_value))  # rainy view are blurry
-    image_hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
-    image_hsv[:, :, 2] *= brightness_coefficient
-
-    image_rgb = cv2.cvtColor(image_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
-
-    image_o[np.where(image_rgb != 0)] = image_rgb[np.where(image_rgb != 0)]
-
-    if needs_float:
-        image_o = to_float(image_o, max_value=255)
-
-    return image_o
-
-
-class RandomRain(ImageOnlyTransform):
-    """Adds rain effects.
-
-    From https://github.com/UjjwalSaxena/Automold--Road-Augmentation-Library
-
-    Args:
-        slant_lower: should be in range [-20, 20].
-        slant_upper: should be in range [-20, 20].
-        drop_length: should be in range [0, 100].
-        drop_width: should be in range [1, 5].
-        drop_color (list of (r, g, b)): rain lines color.
-        blur_value (int): rainy view are blurry
-        brightness_coefficient (float): rainy days are usually shady. Should be in range [0, 1].
-        rain_type: One of [None, "drizzle", "heavy", "torrestial"]
-
-    Targets:
-        image
-
-    Image types:
-        uint8, float32
-    """
-
-    def __init__(
-        self,
-        slant_lower=-10,
-        slant_upper=10,
-        drop_length=20,
-        drop_width=1,
-        drop_color=(200, 200, 200),
-        blur_value=7,
-        brightness_coefficient=0.7,
-        rain_type=None,
-        always_apply=False,
-        p=0.5,
-    ):
-        super(RandomRain, self).__init__(always_apply, p)
-
-        if rain_type not in ["drizzle", "heavy", "torrential", "fish", None]:
-            raise ValueError(
-                "raint_type must be one of ({}). Got: {}".format(["drizzle", "heavy", "torrential", None], rain_type)
-            )
-        if not -20 <= slant_lower <= slant_upper <= 20:
-            raise ValueError(
-                "Invalid combination of slant_lower and slant_upper. Got: {}".format((slant_lower, slant_upper))
-            )
-        if not 1 <= drop_width <= 5:
-            raise ValueError("drop_width must be in range [1, 5]. Got: {}".format(drop_width))
-        if not 0 <= drop_length <= 100:
-            raise ValueError("drop_length must be in range [0, 100]. Got: {}".format(drop_length))
-        if not 0 <= brightness_coefficient <= 1:
-            raise ValueError("brightness_coefficient must be in range [0, 1]. Got: {}".format(brightness_coefficient))
-
-        self.slant_lower = slant_lower
-        self.slant_upper = slant_upper
-
-        self.drop_length = drop_length
-        self.drop_width = drop_width
-        self.drop_color = drop_color
-        self.blur_value = blur_value
-        self.brightness_coefficient = brightness_coefficient
-        self.rain_type = rain_type
-
-    def apply(self, image, slant=10, drop_length=20, rain_drops=(), **params):
-        return add_rain(
-            image,
-            slant,
-            drop_length,
-            self.drop_width,
-            self.drop_color,
-            self.blur_value,
-            self.brightness_coefficient,
-            rain_drops,
-        )
-
-    @property
-    def targets_as_params(self):
-        return ["image"]
-
-    def get_params_dependent_on_targets(self, params):
-        img = params["image"]
-        slant = int(random.uniform(self.slant_lower, self.slant_upper))
-
-        height, width = img.shape[:2]
-        area = height * width
-
-        if self.rain_type == "fish":
-            num_drops = int(random.uniform(area / 770, area / 600))
-            drop_length = int(random.uniform(5, 18))
-            color = [0, 0, 0]
-            for i in range(3):
-                color[i] = self.drop_color[i] + int(random.uniform(-20, 20))
-
-            self.drop_color = color
-
-            if np.random.rand() < 0.1:
-                self.drop_width = 2
-
-        elif self.rain_type == "drizzle":
-            num_drops = area // 770
-            drop_length = 10
-        elif self.rain_type == "heavy":
-            num_drops = width * height // 600
-            drop_length = 30
-        elif self.rain_type == "torrential":
-            num_drops = area // 500
-            drop_length = 60
-        else:
-            drop_length = self.drop_length
-            num_drops = area // 600
-
-        rain_drops = []
-
-        for _i in range(num_drops):  # If You want heavy rain, try increasing this
-            if slant < 0:
-                x = random.randint(slant, width)
-            else:
-                x = random.randint(0, width - slant)
-
-            y = random.randint(0, height - drop_length)
-
-            rain_drops.append((x, y))
-
-        return {"drop_length": drop_length, "rain_drops": rain_drops, "slant": slant}
-
-    def get_transform_init_args_names(self):
-        return (
-            "slant_lower",
-            "slant_upper",
-            "drop_length",
-            "drop_width",
-            "drop_color",
-            "blur_value",
-            "brightness_coefficient",
-            "rain_type",
-        )
-
-
-augment = A.Compose([
-    A.HorizontalFlip(),
-
-    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=35, p=0.7),
-    RandomRain(rain_type='fish', brightness_coefficient=1.0, blur_value=1, drop_color=(190, 120, 60), p=0.25),
-
-    A.OneOf([
-        A.GaussianBlur(blur_limit=(3, 5), sigma_limit=(0.1, 2.0)),
-        A.RandomFog(fog_coef_lower=0.01, fog_coef_upper=0.1),
-    ], p=0.25),
-
-    # A.OneOf([
-    #     A.Perspective(),
-    #     A.ShiftScaleRotate(scale_limit=(-0.4, 0), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
-    #     A.ShiftScaleRotate(scale_limit=(0, 0.2), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
-    #     A.ShiftScaleRotate(rotate_limit=20, shift_limit=0, scale_limit=0, border_mode=cv2.BORDER_CONSTANT),
-    # ], p=0.7),
-
-    A.GaussNoise(p=0.7),
-])
-
-
 # Ancillary functions --------------------------------------------------------------------------------------------------
 def load_image(self, i):
     # loads 1 image from dataset index 'i', returns im, original hw, resized hw
@@ -972,7 +691,6 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
-        # img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left
@@ -1259,7 +977,7 @@ def dataset_stats(path='coco128.yaml', autodownload=False, verbose=False, profil
             im_height, im_width = im.shape[:2]
             r = max_dim / max(im_height, im_width)  # ratio
             if r < 1.0:  # image too large
-                im = cv2.resize(im, (int(im_width * r), int(im_height * r)), interpolation=cv2.INTER_LINEAR)
+                im = cv2.resize(im, (int(im_width * r), int(im_height * r)), interpolation=cv2.INTER_AREA)
             cv2.imwrite(str(f_new), im)
 
     zipped, data_dir, yaml_path = unzip(Path(path))

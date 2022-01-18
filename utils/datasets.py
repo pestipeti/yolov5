@@ -929,12 +929,12 @@ augment = A.Compose([
         A.RandomFog(fog_coef_lower=0.01, fog_coef_upper=0.1),
     ], p=0.25),
 
-    A.OneOf([
-        A.Perspective(),
-        A.ShiftScaleRotate(scale_limit=(-0.4, 0), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
-        A.ShiftScaleRotate(scale_limit=(0, 0.2), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
-        A.ShiftScaleRotate(rotate_limit=20, shift_limit=0, scale_limit=0, border_mode=cv2.BORDER_CONSTANT),
-    ], p=0.7),
+    # A.OneOf([
+    #     A.Perspective(),
+    #     A.ShiftScaleRotate(scale_limit=(-0.4, 0), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
+    #     A.ShiftScaleRotate(scale_limit=(0, 0.2), shift_limit=0, rotate_limit=0, border_mode=cv2.BORDER_CONSTANT),
+    #     A.ShiftScaleRotate(rotate_limit=20, shift_limit=0, scale_limit=0, border_mode=cv2.BORDER_CONSTANT),
+    # ], p=0.7),
 
     A.GaussNoise(p=0.7),
 ])
@@ -972,7 +972,7 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
-        img = augment(image=img)["image"]
+        # img = augment(image=img)["image"]
 
         # place img in img4
         if i == 0:  # top left

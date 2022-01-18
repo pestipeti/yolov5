@@ -937,8 +937,7 @@ augment = A.Compose([
     ], p=0.7),
 
     A.GaussNoise(p=0.7),
-
-], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']))
+])
 
 
 # Ancillary functions --------------------------------------------------------------------------------------------------

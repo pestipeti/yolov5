@@ -393,6 +393,12 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations() if augment else None
 
+        print("----- LoadImagesAndLabels -----")
+        print(f"    image_size: {img_size}")
+        print(f"    augment: {augment}")
+        print(f"    rect: {self.rect}")
+        print(f"    mosaic: {self.mosaic}")
+
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
@@ -681,6 +687,49 @@ def load_image(self, i):
         return self.imgs[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
 
 
+def load_starfish_mosaic(self, index):
+    labels4, segements4 = [], []
+
+    # Target (train) image size -> 1280x1280
+    s = self.img_size
+
+    # Mosaic center
+    xc = int(random.uniform(s * .25, s * .75))
+    yc = int(random.uniform(s * .25, s * .75))
+
+    # "this" + 3 additional image indices
+    indices = [index] + random.choices(self.indices, k=3)
+    random.shuffle(indices)
+
+    for i, idx in enumerate(indices):
+
+        # Load image (h, w -> resized to args.img_size
+        img, _, (h, w) = load_image(self, idx)
+
+        # Copy image crop to mosaic (quadrant #i)
+        if i == 0:
+            img4 = np.full((s, s, img.shape[2]), 114, dtype=np.uint8)
+
+        elif i == 1:
+            pass
+        elif i == 2:
+            pass
+        elif i == 3:
+            pass
+
+        # img4[] = img[]
+
+        # "Crop" labels
+
+    # Fix labels
+
+    # Augment
+    if self.hyp['copy_paste']:
+        print("WARNING! Copy past augmentation is not supported with the 'starfish' mosaic!")
+
+    return img4, labels4
+
+
 def load_mosaic(self, index):
     # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
     labels4, segments4 = [], []
@@ -690,7 +739,7 @@ def load_mosaic(self, index):
     random.shuffle(indices)
     for i, index in enumerate(indices):
         # Load image
-        img, _, (h, w) = load_image(self, index)
+        img, _, (h, w) = load_image(self, index)  # (h, w -> resized to args.img_size)
 
         # place img in img4
         if i == 0:  # top left

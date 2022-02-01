@@ -12,6 +12,10 @@ import numpy as np
 from utils.general import LOGGER, check_version, colorstr, resample_segments, segment2box
 from utils.metrics import bbox_ioa
 
+from albumentations.core.transforms_interface import DualTransform
+from albumentations.augmentations.crops.functional import crop, bbox_crop
+from albumentations.augmentations.geometric.functional import resize
+
 
 class Albumentations:
     # YOLOv5 Albumentations class (optional, only used if package is installed)
@@ -64,6 +68,127 @@ class Albumentations:
             new = self.transform(image=im, bboxes=labels[:, 1:], class_labels=labels[:, 0])  # transformed
             im, labels = new['image'], np.array([[c, *b] for c, b in zip(new['class_labels'], new['bboxes'])])
         return im, labels
+
+
+class StarfishBoxCrop(DualTransform):
+
+    def __init__(self, scale=(0.2, 1.0), always_apply=False, p=1.0):
+        super(StarfishBoxCrop, self).__init__(always_apply, p)
+
+        self.scale = scale
+        self.margin = 0.1
+
+    def apply(self, img, x1, y1, x2, y2, **params):
+        return crop(img, x_min=x1, y_min=y1, x_max=x2, y_max=y2)
+
+    def apply_to_bbox(self, bbox, **params):
+        return bbox_crop(
+            bbox,
+            x_min=params["x1"],
+            y_min=params["y1"],
+            x_max=params["x2"],
+            y_max=params["y2"],
+            rows=params["rows"],
+            cols=params["cols"]
+        )
+
+    def apply_to_keypoint(self, keypoint, **params):
+        return keypoint
+
+    def get_params_dependent_on_targets(self, params):
+        # Image height, width
+        img_h, img_w = params["image"].shape[:2]
+
+        # Mosaic target w, h
+        target_h, target_w = params["target_h"], params["target_w"]
+
+        # Boxes
+        boxes = params["bboxes"]
+
+        # 2, random scale factor (for crop size)
+        scale = random.uniform(*self.scale)
+        crop_h, crop_w = int(target_h * scale), int(target_w * scale)
+
+        if len(boxes) == 0:
+            # Negative sample random crop
+            x1 = np.random.randint(0, img_w - crop_w)
+            y1 = np.random.randint(0, img_h - crop_h)
+
+            return {
+                "x1": x1,
+                "y1": y1,
+                "x2": x1 + crop_w,
+                "y2": y1 + crop_h,
+            }
+
+        # 1, select a random box
+        box = boxes[np.random.randint(0, len(boxes))]
+
+        bx1 = box[0] * img_w
+        by1 = box[1] * img_h
+        bx2 = box[2] * img_w
+        by2 = box[3] * img_h
+        bw = bx2 - bx1
+        bh = by2 - by1
+
+        # 3, calculate xyxy crop coordinates
+        crop_x1_min = max(0, round(bx2 - bw * self.margin) - crop_w)
+        crop_x1_max = min(img_w - crop_w, round(bx1 + bw * self.margin))
+
+        crop_y1_min = max(0, round(by2 - bh * self.margin) - crop_h)
+        crop_y1_max = min(img_h - crop_h, round(by1 + bh * self.margin))
+
+        if crop_y1_min > crop_y1_max:
+            print(f"bx1: {bx1}, by1: {by1}, bx1: {bx1}, by2: {by2}, bw: {bw}, bh: {bh}")
+            print(f"img_w: {img_w}, img_h: {img_h}")
+            print(f"scale: {scale}")
+            print(f"crop_w: {crop_w}, crop_h: {crop_h}")
+
+        crop_x1 = np.random.randint(crop_x1_min, crop_x1_max)
+        crop_y1 = np.random.randint(crop_y1_min, crop_y1_max)
+
+        return {
+            "x1": crop_x1,
+            "y1": crop_y1,
+            "x2": crop_x1 + crop_w,
+            "y2": crop_y1 + crop_h,
+        }
+
+    @property
+    def targets_as_params(self):
+        return ["image", "bboxes", "target_w", "target_h"]
+
+    def get_transform_init_args_names(self):
+        return "target_w", "target_h"
+
+
+class StarfishMosaicResize(DualTransform):
+
+    def __init__(self, always_apply=False, p=1.0):
+        super(StarfishMosaicResize, self).__init__(always_apply, p)
+
+    def apply(self, img, interpolation=cv2.INTER_LINEAR, **params):
+        return resize(img, height=params["target_h"], width=params["target_w"], interpolation=interpolation)
+
+    def apply_to_bbox(self, bbox, **params):
+        # Bounding box coordinates are scale invariant
+        return bbox
+
+    def apply_to_keypoint(self, keypoint, **params):
+        return keypoint
+
+    def get_params_dependent_on_targets(self, params):
+        return {
+            "target_w": params["target_w"],
+            "target_h": params["target_h"]
+        }
+
+    @property
+    def targets_as_params(self):
+        return ["image", "bboxes", "target_w", "target_h"]
+
+    def get_transform_init_args_names(self):
+        return "target_w", "target_h", "interpolation"
 
 
 def augment_hsv(im, hgain=0.5, sgain=0.5, vgain=0.5):

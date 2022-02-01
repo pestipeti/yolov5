@@ -25,8 +25,10 @@ import yaml
 from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
+import albumentations as A
 
-from utils.augmentations import Albumentations, augment_hsv, copy_paste, letterbox, mixup, random_perspective
+from utils.augmentations import (Albumentations, augment_hsv, copy_paste, letterbox, mixup,
+                                 random_perspective, StarfishMosaicResize, StarfishBoxCrop)
 from utils.general import (LOGGER, NUM_THREADS, check_dataset, check_requirements, check_yaml, clean_str,
                            segments2boxes, xyn2xy, xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
@@ -393,11 +395,11 @@ class LoadImagesAndLabels(Dataset):
         self.path = path
         self.albumentations = Albumentations() if augment else None
 
-        print("----- LoadImagesAndLabels -----")
-        print(f"    image_size: {img_size}")
-        print(f"    augment: {augment}")
-        print(f"    rect: {self.rect}")
-        print(f"    mosaic: {self.mosaic}")
+        # print("----- LoadImagesAndLabels -----")
+        # print(f"    image_size: {img_size}")
+        # print(f"    augment: {augment}")
+        # print(f"    rect: {self.rect}")
+        # print(f"    mosaic: {self.mosaic}")
 
         try:
             f = []  # image files
@@ -566,11 +568,13 @@ class LoadImagesAndLabels(Dataset):
         if mosaic:
             # Load mosaic
             img, labels = load_mosaic(self, index)
+            # img, labels = load_starfish_mosaic(self, index)
             shapes = None
 
             # MixUp augmentation
             if random.random() < hyp['mixup']:
                 img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
+                # img, labels = mixup(img, labels, *load_starfish_mosaic(self, random.randint(0, self.n - 1)))
 
         else:
             # Load image
@@ -687,15 +691,47 @@ def load_image(self, i):
         return self.imgs[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
 
 
+mosaic_tr = A.Compose(
+    [
+        # REQUIRED | Crop around a randomly selected box (keep aspect ratio)
+        StarfishBoxCrop(scale=(0.3, 1.2), p=1.0),
+
+        # A.Flip(p=0.5),
+        # A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=10, val_shift_limit=20, p=0.75),
+        # A.GaussNoise(p=1.0),
+
+        # REQUIRED | Resize to the mosaic's w/h
+        StarfishMosaicResize(p=1.0)
+    ],
+    bbox_params=A.BboxParams(format='pascal_voc', label_fields=["class_labels"]),
+    p=1.0
+)
+
+
 def load_starfish_mosaic(self, index):
-    labels4, segements4 = [], []
+    labels4 = []
 
     # Target (train) image size -> 1280x1280
-    s = self.img_size
+    # (w, h)
+
+    # TODO: Calculate this
+    # s = (self.img_size, int(self.img_size * 720/1280))
+    s = (1280, 736)
 
     # Mosaic center
-    xc = int(random.uniform(s * .25, s * .75))
-    yc = int(random.uniform(s * .25, s * .75))
+    xc = int(random.uniform(s[0] * .25, s[0] * .75))
+    yc = int(random.uniform(s[1] * .25, s[1] * .75))
+
+    # print(f"xc: {xc}, yc: {yc}")
+
+    # Mosaics w/h
+    m = [(0, 0)] * 4
+    m[0] = (yc, xc)
+    m[1] = (yc, s[0] - xc)
+    m[2] = (s[1] - yc, xc)
+    m[3] = (s[1] - yc, s[0] - xc)
+
+    # print(m)
 
     # "this" + 3 additional image indices
     indices = [index] + random.choices(self.indices, k=3)
@@ -706,26 +742,79 @@ def load_starfish_mosaic(self, index):
         # Load image (h, w -> resized to args.img_size
         img, _, (h, w) = load_image(self, idx)
 
+        labels = self.labels[idx].copy()
+
+        if labels.size:
+            labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, 0, 0)  # normalized xywh to pixel xyxy format
+
+        # print(f"img #{i} shape: {img.shape}")
+        labels[labels[:, 3] > 1280, 3] = 1280
+        labels[labels[:, 4] > 720, 4] = 720
+
+        trd = mosaic_tr(
+            image=img,
+            bboxes=labels[:, 1:],
+            class_labels=[0] * len(labels),
+            target_w=m[i][1],
+            target_h=m[i][0]
+        )
+
+        img = trd["image"]
+        boxes = trd["bboxes"]
+
+        if len(boxes) > 0:
+            labels = np.zeros((len(boxes), 5), dtype=np.float32)
+            labels[:, 1:] = np.array(boxes)
+
+        else:
+            labels = None
+
+        offset_x = 0
+        offset_y = 0
+
         # Copy image crop to mosaic (quadrant #i)
         if i == 0:
-            img4 = np.full((s, s, img.shape[2]), 114, dtype=np.uint8)
-
+            img4 = np.full((s[1], s[0], img.shape[2]), 114, dtype=np.uint8)
+            img4[:yc, :xc] = img
         elif i == 1:
-            pass
+            img4[:yc, xc:] = img
+            offset_x = xc
+
         elif i == 2:
-            pass
+            img4[yc:, :xc] = img
+            offset_y = yc
+
         elif i == 3:
-            pass
+            img4[yc:, xc:] = img
+            offset_x = xc
+            offset_y = yc
 
-        # img4[] = img[]
+        if labels is not None:
+            labels[:, 1] += offset_x
+            labels[:, 2] += offset_y
+            labels[:, 3] += offset_x
+            labels[:, 4] += offset_y
 
-        # "Crop" labels
+            fixed_labels = []
 
-    # Fix labels
+            for label in labels:
+                w = label[3] - label[1]
+                h = label[4] - label[2]
+
+                if w/h < 0.2 or h/w < 0.2:
+                    continue
+
+                fixed_labels.append(label)
+
+            fixed_labels = np.array(fixed_labels)
+            labels4.append(fixed_labels)
 
     # Augment
     if self.hyp['copy_paste']:
         print("WARNING! Copy past augmentation is not supported with the 'starfish' mosaic!")
+
+    if len(labels4) > 0:
+        labels4 = np.concatenate(labels4, 0)
 
     return img4, labels4
 

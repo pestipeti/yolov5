@@ -27,10 +27,10 @@ from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
 import albumentations as A
 
-from utils.augmentations import (Albumentations, augment_hsv, copy_paste, letterbox, mixup,
-                                 random_perspective, StarfishMosaicResize, StarfishBoxCrop)
+from utils.augmentations import (Albumentations, StarfishMosaicAlbumentation, augment_hsv, copy_paste, letterbox, mixup,
+                                 random_perspective)
 from utils.general import (LOGGER, NUM_THREADS, check_dataset, check_requirements, check_yaml, clean_str,
-                           segments2boxes, xyn2xy, xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
+                           segments2boxes, xyn2xy, xywh2xyxy, xywhn2xyxy, xyxy2xywhn, check_img_size)
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
@@ -394,6 +394,7 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations() if augment else None
+        self.mosaicalbumentation = StarfishMosaicAlbumentation() if augment else None
 
         # print("----- LoadImagesAndLabels -----")
         # print(f"    image_size: {img_size}")
@@ -565,16 +566,23 @@ class LoadImagesAndLabels(Dataset):
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
+        mosaic_type = hyp['mosaic_type'] if 'mosaic_type' in hyp else 'yolov5'
+
         if mosaic:
             # Load mosaic
-            img, labels = load_mosaic(self, index)
-            # img, labels = load_starfish_mosaic(self, index)
+            if mosaic_type == 'starfish':
+                img, labels = load_starfish_mosaic(self, index)
+            else:
+                img, labels = load_mosaic(self, index)
+
             shapes = None
 
             # MixUp augmentation
             if random.random() < hyp['mixup']:
-                img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
-                # img, labels = mixup(img, labels, *load_starfish_mosaic(self, random.randint(0, self.n - 1)))
+                if mosaic_type == 'starfish':
+                    img, labels = mixup(img, labels, *load_starfish_mosaic(self, random.randint(0, self.n - 1)))
+                else:
+                    img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
 
         else:
             # Load image
@@ -691,23 +699,6 @@ def load_image(self, i):
         return self.imgs[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
 
 
-mosaic_tr = A.Compose(
-    [
-        # REQUIRED | Crop around a randomly selected box (keep aspect ratio)
-        StarfishBoxCrop(scale=(0.3, 1.2), p=1.0),
-
-        # A.Flip(p=0.5),
-        # A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=10, val_shift_limit=20, p=0.75),
-        # A.GaussNoise(p=1.0),
-
-        # REQUIRED | Resize to the mosaic's w/h
-        StarfishMosaicResize(p=1.0)
-    ],
-    bbox_params=A.BboxParams(format='pascal_voc', label_fields=["class_labels"]),
-    p=1.0
-)
-
-
 def load_starfish_mosaic(self, index):
     labels4 = []
 
@@ -715,8 +706,8 @@ def load_starfish_mosaic(self, index):
     # (w, h)
 
     # TODO: Calculate this
-    # s = (self.img_size, int(self.img_size * 720/1280))
-    s = (1280, 736)
+    o = (self.img_size, int(self.img_size * 720/1280))
+    s = check_img_size(o, warning=False)
 
     # Mosaic center
     xc = int(random.uniform(s[0] * .25, s[0] * .75))
@@ -748,26 +739,16 @@ def load_starfish_mosaic(self, index):
             labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, 0, 0)  # normalized xywh to pixel xyxy format
 
         # print(f"img #{i} shape: {img.shape}")
-        labels[labels[:, 3] > 1280, 3] = 1280
-        labels[labels[:, 4] > 720, 4] = 720
+        labels[labels[:, 3] > o[0], 3] = o[0]
+        labels[labels[:, 4] > o[1], 4] = o[1]
 
-        trd = mosaic_tr(
+        img, labels = self.mosaicalbumentation(
             image=img,
             bboxes=labels[:, 1:],
-            class_labels=[0] * len(labels),
+            labels=[0] * len(labels),
             target_w=m[i][1],
             target_h=m[i][0]
         )
-
-        img = trd["image"]
-        boxes = trd["bboxes"]
-
-        if len(boxes) > 0:
-            labels = np.zeros((len(boxes), 5), dtype=np.float32)
-            labels[:, 1:] = np.array(boxes)
-
-        else:
-            labels = None
 
         offset_x = 0
         offset_y = 0
@@ -801,7 +782,8 @@ def load_starfish_mosaic(self, index):
                 w = label[3] - label[1]
                 h = label[4] - label[2]
 
-                if w/h < 0.2 or h/w < 0.2:
+                # TODO:
+                if w == 0 or h == 0 or w/h < 0.2 or h/w < 0.2:
                     continue
 
                 fixed_labels.append(label)

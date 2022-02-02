@@ -15,10 +15,16 @@ from utils.metrics import bbox_ioa
 from albumentations.core.transforms_interface import DualTransform
 from albumentations.augmentations.crops.functional import crop, bbox_crop
 from albumentations.augmentations.geometric.functional import resize
+from albumentations.core.transforms_interface import ImageOnlyTransform
+from albumentations.augmentations.functional import MAX_VALUES_BY_DTYPE
+from functools import wraps
 
 
 class Albumentations:
     # YOLOv5 Albumentations class (optional, only used if package is installed)
+    """
+    Albumentation *AFTER* mosaic/mixup
+    """
     def __init__(self):
         self.transform = None
         try:
@@ -40,22 +46,6 @@ class Albumentations:
                 A.GaussNoise(p=0.7),
 
             ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-            """
-            self.transform = A.Compose([
-                A.OneOf([
-                    A.Blur(p=0.5),
-                    A.MedianBlur(p=0.5),
-                ], p=0.0),
-                A.RGBShift(p=0.0),
-                A.ToGray(p=0.0),
-                A.CLAHE(p=0.0),
-                A.RandomBrightnessContrast(p=0.0),
-                A.CoarseDropout(max_holes=16, min_holes=4, max_width=48, min_width=16, max_height=48, min_height=16, p=0),
-                # A.RandomGamma(p=0.0),
-                # A.ImageCompression(quality_lower=75, p=0.0)
-
-            ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-            """
 
             LOGGER.info(colorstr('albumentations: ') + ', '.join(f'{x}' for x in self.transform.transforms if x.p))
         except ImportError:  # package not installed, skip
@@ -70,6 +60,73 @@ class Albumentations:
         return im, labels
 
 
+class StarfishMosaicAlbumentation:
+    """
+    Albumentation *BEFORE* mosaic/mixup
+    """
+    def __init__(self):
+        self.transform = None
+        try:
+            import albumentations as A
+            check_version(A.__version__, '1.0.3', hard=True)  # version requirement
+
+            self.transform = A.Compose(
+                [
+                    # REQUIRED | Crop around a randomly selected box (keep aspect ratio)
+                    StarfishBoxCrop(scale=(0.3, 1.2), p=1.0),
+
+                    A.HorizontalFlip(),
+
+                    A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=35, p=0.7),
+                    A.RandomBrightnessContrast(brightness_limit=(-0.35, 0.1), p=0.75),
+                    RandomRain(rain_type='fish', brightness_coefficient=1.0, blur_value=1,
+                               drop_color=(190, 120, 60), p=0.25),
+
+                    A.OneOf([
+                        A.GaussianBlur(blur_limit=(3, 5), sigma_limit=(0.1, 2.0)),
+                        A.RandomFog(fog_coef_lower=0.01, fog_coef_upper=0.1),
+                    ], p=0.5),
+
+                    A.CoarseDropout(min_holes=8, max_holes=16, min_width=8, max_width=24, min_height=8, max_height=24,
+                                    p=0.75),
+                    A.GaussNoise(p=0.7),
+
+                    # REQUIRED | Resize to the mosaic's w/h
+                    StarfishMosaicResize(p=1.0)
+                ],
+                bbox_params=A.BboxParams(format='pascal_voc', label_fields=["class_labels"]),
+                p=1.0
+            )
+            LOGGER.info(colorstr('starfish albumentations: ') + ', '.join(f'{x}' for x in self.transform.transforms if x.p))
+        except ImportError:  # package not installed, skip
+            pass
+        except Exception as e:
+            LOGGER.info(colorstr('starfish albumentations: ') + f'{e}')
+
+    def __call__(self, image, bboxes, labels, target_w, target_h, p=1.0):
+        if self.transform and random.random() < p:
+            new = self.transform(
+                image=image,
+                bboxes=bboxes,
+                class_labels=labels,
+                target_w=target_w,
+                target_h=target_h
+            )  # transformed
+            # image, labels = new['image'], np.array([[c, *b] for c, b in zip(new['class_labels'], new['bboxes'])])
+
+            image = new["image"]
+            bboxes = new["bboxes"]
+
+            if len(bboxes) > 0:
+                labels = np.zeros((len(bboxes), 5), dtype=np.float32)
+                labels[:, 1:] = np.array(bboxes)
+
+            else:
+                labels = None
+
+        return image, labels
+
+
 class StarfishBoxCrop(DualTransform):
 
     def __init__(self, scale=(0.2, 1.0), always_apply=False, p=1.0):
@@ -77,6 +134,8 @@ class StarfishBoxCrop(DualTransform):
 
         self.scale = scale
         self.margin = 0.1
+        self.target_w = None
+        self.target_h = None
 
     def apply(self, img, x1, y1, x2, y2, **params):
         return crop(img, x_min=x1, y_min=y1, x_max=x2, y_max=y2)
@@ -131,6 +190,12 @@ class StarfishBoxCrop(DualTransform):
         bw = bx2 - bx1
         bh = by2 - by1
 
+        if bh > crop_h:
+            crop_h = int(bh * 1.1)
+
+        if bw > crop_w:
+            crop_w = int(bw * 1.1)
+
         # 3, calculate xyxy crop coordinates
         crop_x1_min = max(0, round(bx2 - bw * self.margin) - crop_w)
         crop_x1_max = min(img_w - crop_w, round(bx1 + bw * self.margin))
@@ -138,11 +203,16 @@ class StarfishBoxCrop(DualTransform):
         crop_y1_min = max(0, round(by2 - bh * self.margin) - crop_h)
         crop_y1_max = min(img_h - crop_h, round(by1 + bh * self.margin))
 
-        if crop_y1_min > crop_y1_max:
-            print(f"bx1: {bx1}, by1: {by1}, bx1: {bx1}, by2: {by2}, bw: {bw}, bh: {bh}")
-            print(f"img_w: {img_w}, img_h: {img_h}")
-            print(f"scale: {scale}")
-            print(f"crop_w: {crop_w}, crop_h: {crop_h}")
+        # if crop_y1_min > crop_y1_max:
+        #     print("\n\n")
+        #     print("=======================================")
+        #     print(f"crop_y1_min: {crop_y1_min}")
+        #     print(f"crop_y1_max: {crop_y1_max}")
+        #     print(f"bx1: {bx1}, by1: {by1}, bx2: {bx2}, by2: {by2}, bw: {bw}, bh: {bh}")
+        #     print(f"img_w: {img_w}, img_h: {img_h}")
+        #     print(f"scale: {scale}")
+        #     print(f"crop_w: {crop_w}, crop_h: {crop_h}")
+        #     print("\n\n")
 
         crop_x1 = np.random.randint(crop_x1_min, crop_x1_max)
         crop_y1 = np.random.randint(crop_y1_min, crop_y1_max)
@@ -166,6 +236,9 @@ class StarfishMosaicResize(DualTransform):
 
     def __init__(self, always_apply=False, p=1.0):
         super(StarfishMosaicResize, self).__init__(always_apply, p)
+        self.target_w = None
+        self.target_h = None
+        self.interpolation = None
 
     def apply(self, img, interpolation=cv2.INTER_LINEAR, **params):
         return resize(img, height=params["target_h"], width=params["target_w"], interpolation=interpolation)
@@ -189,6 +262,253 @@ class StarfishMosaicResize(DualTransform):
 
     def get_transform_init_args_names(self):
         return "target_w", "target_h", "interpolation"
+
+
+def to_float(img, max_value=None):
+    if max_value is None:
+        try:
+            max_value = MAX_VALUES_BY_DTYPE[img.dtype]
+        except KeyError:
+            raise RuntimeError(
+                "Can't infer the maximum value for dtype {}. You need to specify the maximum value manually by "
+                "passing the max_value argument".format(img.dtype)
+            )
+    return img.astype("float32") / max_value
+
+
+def from_float(img, dtype, max_value=None):
+    if max_value is None:
+        try:
+            max_value = MAX_VALUES_BY_DTYPE[dtype]
+        except KeyError:
+            raise RuntimeError(
+                "Can't infer the maximum value for dtype {}. You need to specify the maximum value manually by "
+                "passing the max_value argument".format(dtype)
+            )
+    return (img * max_value).astype(dtype)
+
+
+def preserve_shape(func):
+    """
+    Preserve shape of the image
+
+    """
+
+    @wraps(func)
+    def wrapped_function(img, *args, **kwargs):
+        shape = img.shape
+        result = func(img, *args, **kwargs)
+        result = result.reshape(shape)
+        return result
+
+    return wrapped_function
+
+
+@preserve_shape
+def add_rain(
+    img,
+    slant,
+    drop_length,
+    drop_width,
+    drop_color,
+    blur_value,
+    brightness_coefficient,
+    rain_drops,
+):
+    """
+
+    From https://github.com/UjjwalSaxena/Automold--Road-Augmentation-Library
+
+    Args:
+        img (numpy.ndarray): Image.
+        slant (int):
+        drop_length:
+        drop_width:
+        drop_color:
+        blur_value (int): Rainy view are blurry.
+        brightness_coefficient (float): Rainy days are usually shady.
+        rain_drops:
+
+    Returns:
+        numpy.ndarray: Image.
+
+    """
+    # non_rgb_warning(img)
+
+    input_dtype = img.dtype
+    needs_float = False
+
+    if input_dtype == np.float32:
+        img = from_float(img, dtype=np.dtype("uint8"))
+        needs_float = True
+    elif input_dtype not in (np.uint8, np.float32):
+        raise ValueError("Unexpected dtype {} for RandomRain augmentation".format(input_dtype))
+
+    image_o = img.copy()
+    image = img.copy()
+    image *= 0
+
+    for (rain_drop_x0, rain_drop_y0) in rain_drops:
+        rain_drop_x1 = rain_drop_x0 + slant
+        rain_drop_y1 = rain_drop_y0 + drop_length
+
+        cv2.line(
+            image,
+            (rain_drop_x0, rain_drop_y0),
+            (rain_drop_x1, rain_drop_y1),
+            drop_color,
+            drop_width,
+        )
+
+    image = cv2.blur(image, (blur_value, blur_value))  # rainy view are blurry
+    image_hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
+    image_hsv[:, :, 2] *= brightness_coefficient
+
+    image_rgb = cv2.cvtColor(image_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+
+    image_o[np.where(image_rgb != 0)] = image_rgb[np.where(image_rgb != 0)]
+
+    if needs_float:
+        image_o = to_float(image_o, max_value=255)
+
+    return image_o
+
+
+class RandomRain(ImageOnlyTransform):
+    """Adds rain effects.
+
+    From https://github.com/UjjwalSaxena/Automold--Road-Augmentation-Library
+
+    Args:
+        slant_lower: should be in range [-20, 20].
+        slant_upper: should be in range [-20, 20].
+        drop_length: should be in range [0, 100].
+        drop_width: should be in range [1, 5].
+        drop_color (list of (r, g, b)): rain lines color.
+        blur_value (int): rainy view are blurry
+        brightness_coefficient (float): rainy days are usually shady. Should be in range [0, 1].
+        rain_type: One of [None, "drizzle", "heavy", "torrestial"]
+
+    Targets:
+        image
+
+    Image types:
+        uint8, float32
+    """
+
+    def __init__(
+        self,
+        slant_lower=-10,
+        slant_upper=10,
+        drop_length=20,
+        drop_width=1,
+        drop_color=(200, 200, 200),
+        blur_value=7,
+        brightness_coefficient=0.7,
+        rain_type=None,
+        always_apply=False,
+        p=0.5,
+    ):
+        super(RandomRain, self).__init__(always_apply, p)
+
+        if rain_type not in ["drizzle", "heavy", "torrential", "fish", None]:
+            raise ValueError(
+                "raint_type must be one of ({}). Got: {}".format(["drizzle", "heavy", "torrential", None], rain_type)
+            )
+        if not -20 <= slant_lower <= slant_upper <= 20:
+            raise ValueError(
+                "Invalid combination of slant_lower and slant_upper. Got: {}".format((slant_lower, slant_upper))
+            )
+        if not 1 <= drop_width <= 5:
+            raise ValueError("drop_width must be in range [1, 5]. Got: {}".format(drop_width))
+        if not 0 <= drop_length <= 100:
+            raise ValueError("drop_length must be in range [0, 100]. Got: {}".format(drop_length))
+        if not 0 <= brightness_coefficient <= 1:
+            raise ValueError("brightness_coefficient must be in range [0, 1]. Got: {}".format(brightness_coefficient))
+
+        self.slant_lower = slant_lower
+        self.slant_upper = slant_upper
+
+        self.drop_length = drop_length
+        self.drop_width = drop_width
+        self.drop_color = drop_color
+        self.blur_value = blur_value
+        self.brightness_coefficient = brightness_coefficient
+        self.rain_type = rain_type
+
+    def apply(self, image, slant=10, drop_length=20, rain_drops=(), **params):
+        return add_rain(
+            image,
+            slant,
+            drop_length,
+            self.drop_width,
+            self.drop_color,
+            self.blur_value,
+            self.brightness_coefficient,
+            rain_drops,
+        )
+
+    @property
+    def targets_as_params(self):
+        return ["image"]
+
+    def get_params_dependent_on_targets(self, params):
+        img = params["image"]
+        slant = int(random.uniform(self.slant_lower, self.slant_upper))
+
+        height, width = img.shape[:2]
+        area = height * width
+
+        if self.rain_type == "fish":
+            num_drops = int(random.uniform(area / 770, area / 600))
+            drop_length = int(random.uniform(5, 18))
+            color = [0, 0, 0]
+            for i in range(3):
+                color[i] = self.drop_color[i] + int(random.uniform(-20, 20))
+
+            self.drop_color = color
+
+            # if np.random.rand() < 0.1:
+            #     self.drop_width = 2
+
+        elif self.rain_type == "drizzle":
+            num_drops = area // 770
+            drop_length = 10
+        elif self.rain_type == "heavy":
+            num_drops = width * height // 600
+            drop_length = 30
+        elif self.rain_type == "torrential":
+            num_drops = area // 500
+            drop_length = 60
+        else:
+            drop_length = self.drop_length
+            num_drops = area // 600
+
+        rain_drops = []
+
+        for _i in range(num_drops):  # If You want heavy rain, try increasing this
+            if slant < 0:
+                x = random.randint(slant, width)
+            else:
+                x = random.randint(0, width - slant)
+
+            y = random.randint(0, height - drop_length)
+
+            rain_drops.append((x, y))
+
+        return {"drop_length": drop_length, "rain_drops": rain_drops, "slant": slant}
+
+    def get_transform_init_args_names(self):
+        return (
+            "slant_lower",
+            "slant_upper",
+            "drop_length",
+            "drop_width",
+            "drop_color",
+            "blur_value",
+            "brightness_coefficient",
+            "rain_type",
+        )
 
 
 def augment_hsv(im, hgain=0.5, sgain=0.5, vgain=0.5):

@@ -707,7 +707,7 @@ def load_starfish_mosaic(self, index):
 
     # TODO: Calculate this
     o = (self.img_size, int(self.img_size * 720/1280))
-    s = check_img_size(o, s=self.stride, floor=self.stride * 2, warning=True)
+    s = check_img_size(o, s=self.stride, floor=self.stride * 2, warning=False)
 
     # Mosaic center
     xc = int(random.uniform(s[0] * .25, s[0] * .75))

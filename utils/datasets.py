@@ -788,7 +788,11 @@ def load_starfish_mosaic(self, index):
 
                 fixed_labels.append(label)
 
-            fixed_labels = np.array(fixed_labels)
+            if len(fixed_labels) > 0:
+                fixed_labels = np.array(fixed_labels)
+            else:
+                fixed_labels = np.zeros((0, 5))
+
             labels4.append(fixed_labels)
 
     # Augment

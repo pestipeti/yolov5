@@ -82,10 +82,10 @@ class StarfishMosaicAlbumentation:
                     RandomRain(rain_type='fish', brightness_coefficient=1.0, blur_value=1,
                                drop_color=(190, 120, 60), p=0.25),
 
-                    A.OneOf([
-                        A.GaussianBlur(blur_limit=(3, 5), sigma_limit=(0.1, 2.0)),
-                        A.RandomFog(fog_coef_lower=0.01, fog_coef_upper=0.1),
-                    ], p=0.5),
+                    #A.OneOf([
+                    #    A.GaussianBlur(blur_limit=(3, 5), sigma_limit=(0.1, 2.0)),
+                    #    A.RandomFog(fog_coef_lower=0.01, fog_coef_upper=0.1),
+                    #], p=0.5),
 
                     A.CoarseDropout(min_holes=8, max_holes=16, min_width=8, max_width=24, min_height=8, max_height=24,
                                     p=0.75),

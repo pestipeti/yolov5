@@ -566,7 +566,7 @@ class LoadImagesAndLabels(Dataset):
 
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp['mosaic']
-        mosaic_type = hyp['mosaic_type'] if 'mosaic_type' in hyp else 'yolov5'
+        mosaic_type = hyp['mosaic_type'] if self.mosaic and 'mosaic_type' in hyp else 'yolov5'
 
         if mosaic:
             # Load mosaic

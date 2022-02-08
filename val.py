@@ -95,7 +95,11 @@ def process_batch(detections, labels, iouv):
 
 def get_lb_metric(preds, gts, scores, iou_matrix, iou_th):
     tps = []
+    tpsc = []
+
     fps = []
+    fpsc = []
+
     fns = []
 
     # check decreasing confidence...
@@ -106,16 +110,18 @@ def get_lb_metric(preds, gts, scores, iou_matrix, iou_th):
         if iou_matrix[_idx][mx] >= iou_th:
             # tp
             tps.append(preds[_idx])
+            tpsc.append(scores[_idx])
             iou_matrix[:, mx] = -1
         else:
             # fp
             fps.append(preds[_idx])
+            fpsc.append(scores[_idx])
 
     for _idx in range(len(gts)):
         if iou_matrix[:, _idx].min() >= 0:
             fns.append(gts[_idx])
 
-    return tps, fps, fns
+    return tps, tpsc, fps, fpsc, fns
 
 
 @torch.no_grad()
@@ -263,7 +269,8 @@ def run(data,
                             "x": int(label[0]),
                             "y": int(label[1]),
                             "w": int(label[2] - label[0]),
-                            "h": int(label[3] - label[1])
+                            "h": int(label[3] - label[1]),
+                            "score": 0.0
                         })
 
                     num_fn = num_fn + nl
@@ -301,25 +308,28 @@ def run(data,
                     num_fp[idx] += fp
                     num_fn[idx] += fn
 
-                tps, fps, fns = get_lb_metric(preds.numpy(), gts.numpy(), scores.numpy(), iou_matrix.numpy(), 0.3)
+                tps, tpsc, fps, fpsc, fns = get_lb_metric(preds.numpy(), gts.numpy(),
+                                                          scores.numpy(), iou_matrix.numpy(), 0.3)
 
-                for it in tps:
+                for itx, it in enumerate(tps):
                     results.append({
                         "path": paths[si],
                         "result": "tp",
                         "x": int(it[0]),
                         "y": int(it[1]),
                         "w": int(it[2] - it[0]),
-                        "h": int(it[3] - it[1])
+                        "h": int(it[3] - it[1]),
+                        "score": tpsc[itx]
                     })
-                for it in fps:
+                for itx, it in enumerate(fps):
                     results.append({
                         "path": paths[si],
                         "result": "fp",
                         "x": int(it[0]),
                         "y": int(it[1]),
                         "w": int(it[2] - it[0]),
-                        "h": int(it[3] - it[1])
+                        "h": int(it[3] - it[1]),
+                        "score": fpsc[itx]
                     })
                 for it in fns:
                     results.append({
@@ -328,7 +338,8 @@ def run(data,
                         "x": int(it[0]),
                         "y": int(it[1]),
                         "w": int(it[2] - it[0]),
-                        "h": int(it[3] - it[1])
+                        "h": int(it[3] - it[1]),
+                        "score": 0.0
                     })
 
             else:
@@ -343,7 +354,8 @@ def run(data,
                         "x": int(prd[0]),
                         "y": int(prd[1]),
                         "w": int(prd[2] - prd[0]),
-                        "h": int(prd[3] - prd[1])
+                        "h": int(prd[3] - prd[1]),
+                        "score": prd[4]
                     })
 
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))  # (correct, conf, pcls, tcls)
